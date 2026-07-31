@@ -1,6 +1,9 @@
 /**
  * Validate that a user-supplied URL is safe for server-side fetch.
  * Returns { valid: true, url } or { valid: false, reason }.
+ *
+ * By default only HTTPS is accepted (Stremio manifests / stream proxy).
+ * Set STREMIO_ALLOW_HTTP=true to also allow http: (e.g. local addon development).
  */
 
 export function stripIpv6Brackets(hostname) {
@@ -48,7 +51,18 @@ function ipv4FromMappedParts(parts) {
 function checkIpv4Mapped(parts) {
   const mapped = ipv4FromMappedParts(parts);
   if (!mapped) return false;
+  // Mapped address present — always treat as blocked if IPv4 is private;
+  // also block when the embedded IPv4 is "public" but still prefer blocking
+  // the entire mapped form only when private (public mapped is unusual but
+  // equivalent to the v4 address itself).
   return isPrivateOrReservedIp(mapped);
+}
+
+function allowHttpManifests() {
+  const raw = String(process.env.STREMIO_ALLOW_HTTP || '')
+    .trim()
+    .toLowerCase();
+  return raw === 'true' || raw === '1' || raw === 'yes';
 }
 
 export function validateExternalUrl(input) {
@@ -59,7 +73,13 @@ export function validateExternalUrl(input) {
     return { valid: false, reason: 'Invalid URL' };
   }
 
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+  if (url.protocol === 'https:') {
+    // ok
+  } else if (url.protocol === 'http:' && allowHttpManifests()) {
+    // ok (explicit escape hatch)
+  } else if (url.protocol === 'http:' || url.protocol === 'https:') {
+    return { valid: false, reason: 'Only HTTPS URLs are allowed' };
+  } else {
     return { valid: false, reason: 'Only HTTP and HTTPS URLs are allowed' };
   }
 
@@ -89,13 +109,20 @@ export function validateExternalUrl(input) {
   return { valid: true, url: url.toString() };
 }
 
+export function isIpLiteral(hostname) {
+  const host = stripIpv6Brackets(String(hostname || '').toLowerCase());
+  if (/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(host)) return true;
+  if (host.includes(':')) return true;
+  return false;
+}
+
 export function isPrivateOrReservedIp(hostname) {
   const host = stripIpv6Brackets(String(hostname || '').toLowerCase());
 
   const ipv4Match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (ipv4Match) {
     const octets = ipv4Match.slice(1).map(Number);
-    if (octets.some((o) => o > 255)) return true;
+    if (octets.some((o) => o > 255)) return true; // fail closed on malformed
     const [a, b] = octets;
 
     if (a === 127) return true;
@@ -118,6 +145,7 @@ export function isPrivateOrReservedIp(hostname) {
     try {
       expanded = expandIPv6(host);
     } catch {
+      // Fail closed: unparseable IPv6 is treated as blocked.
       return true;
     }
 
