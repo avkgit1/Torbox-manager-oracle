@@ -121,12 +121,11 @@ const API_CLIENT_CACHE_TTL_MS = parseInt(
   10
 ); // 30 minutes default
 
-// Non-retryable error codes
+// Non-retryable client/request faults (TorBox: codes ending in ERROR are server faults and retryable).
 const NON_RETRYABLE_ERRORS = [
-  'DATABASE_ERROR',
   'NO_AUTH',
   'BAD_TOKEN',
-  'AUTH_ERROR',
+  'AUTH_ERROR', // treated as permanent for uploads (paired with isAuthFailure)
   'INVALID_OPTION',
   'MISSING_REQUIRED_OPTION',
   'BOZO_NZB',
@@ -2688,6 +2687,10 @@ class UploadProcessor {
     // Note: Recovery is called separately before start() in initializeServices()
     // (after counter sync / quota backfill) so the first processUploads() does not
     // race batch closeConnection sweeps.
+    // Startup already ran syncUploadCountersForAllUsers — skip the redundant
+    // fire-and-forget full-user sync on the first cleanup tick.
+    this.lastCleanupAt = Date.now();
+    this.lastRecoveryAt = Date.now();
 
     // Process immediately on start (to process any recovered uploads)
     this.processUploads();
